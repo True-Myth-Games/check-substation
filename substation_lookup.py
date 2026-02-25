@@ -1,8 +1,17 @@
 import re
 import sys
 import json
-from curl_cffi import requests as cffi_requests
 import requests
+
+try:
+    from curl_cffi import requests as cffi_requests
+except ImportError:
+    cffi_requests = None
+
+try:
+    import cloudscraper
+except ImportError:
+    cloudscraper = None
 
 POLYGON_SERVICE_URL = (
     "https://services5.arcgis.com/yaIunh7Pa3QmwPBN/arcgis/rest/services/"
@@ -48,9 +57,48 @@ def extract_coordinates_from_bazaraki(url: str) -> tuple[float, float]:
     if "bazaraki.com" not in url:
         raise ValueError("URL must be from bazaraki.com")
 
-    resp = cffi_requests.get(url, impersonate="chrome", timeout=20)
-    resp.raise_for_status()
-    html = resp.text
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    html = None
+
+    if cffi_requests:
+        browsers = ["chrome", "chrome110", "chrome116", "chrome120", "safari"]
+        for browser in browsers:
+            try:
+                resp = cffi_requests.get(
+                    url, impersonate=browser, headers=headers, timeout=20,
+                )
+                if resp.status_code == 200 and "data-default-lat" in resp.text:
+                    html = resp.text
+                    break
+            except Exception:
+                continue
+
+    if html is None and cloudscraper:
+        try:
+            scraper = cloudscraper.create_scraper(
+                browser={"browser": "chrome", "platform": "linux", "desktop": True},
+            )
+            resp = scraper.get(url, headers=headers, timeout=20)
+            if resp.status_code == 200 and "data-default-lat" in resp.text:
+                html = resp.text
+        except Exception:
+            pass
+
+    if html is None:
+        raise ValueError(
+            "Could not fetch Bazaraki page. "
+            "Cloudflare may be blocking cloud server requests."
+        )
 
     match = re.search(
         r'data-default-lat="([0-9.]+)"\s+data-default-lng="([0-9.]+)"',
