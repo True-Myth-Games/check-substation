@@ -200,3 +200,27 @@ button.submit:disabled { background: #475569; cursor: not-allowed; }
     transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .map-link:hover { background: #334155; color: #e2e8f0; border-color: #475569; }
+
+/* Section headers in results */
+.section-header {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 20px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #334155;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.section-header:first-child { margin-top: 0; }
+.section-source {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: #475569;
+    text-transform: none;
+    letter-spacing: normal;
+    margin-left: auto;
+}

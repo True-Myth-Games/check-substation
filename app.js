@@ -1,6 +1,13 @@
 /* ── Config ── */
 const POLYGON_URL = "https://services5.arcgis.com/yaIunh7Pa3QmwPBN/arcgis/rest/services/DistrTrSubstThPoly20240528racp/FeatureServer/317/query";
 const SUBSTATION_URL = "https://services5.arcgis.com/yaIunh7Pa3QmwPBN/arcgis/rest/services/Transmission_Substations_RES_Hosting_WFL1/FeatureServer/0/query";
+
+const DLS_BASE = "https://eservices.dls.moi.gov.cy/arcgis/rest/services/National/CadastralMap_EN/MapServer";
+const DLS_PARCELS = DLS_BASE + "/0/query";
+const DLS_ZONES = DLS_BASE + "/12/query";
+const DLS_MUNICIPALITY = DLS_BASE + "/16/query";
+const DLS_DISTRICT = DLS_BASE + "/15/query";
+
 const CORS_PROXIES = [
     url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
@@ -114,18 +121,46 @@ function getSubstationNames() {
 
 getSubstationNames();
 
+/* ── DLS Ktimatologio queries ── */
+function dlsQuery(endpoint, outFields, lat, lng) {
+    const params = new URLSearchParams({
+        geometry: `${lng},${lat}`,
+        geometryType: "esriGeometryPoint",
+        inSR: "4326",
+        spatialRel: "esriSpatialRelIntersects",
+        outFields,
+        returnGeometry: "false",
+        f: "json",
+    });
+    return fetch(`${endpoint}?${params}`)
+        .then(r => r.json())
+        .then(d => (d.features && d.features.length > 0) ? d.features[0].attributes : null)
+        .catch(() => null);
+}
+
+async function findPlotInfo(lat, lng) {
+    const [parcel, zone, municipality, district] = await Promise.all([
+        dlsQuery(DLS_PARCELS, "PARCEL_NBR,SHEET,PLAN_NBR,DIST_CODE,VIL_CODE,BLCK_CODE,SHAPE.STArea()", lat, lng),
+        dlsQuery(DLS_ZONES, "PLNZNT_NAME,PLNZNT_DESC", lat, lng),
+        dlsQuery(DLS_MUNICIPALITY, "VIL_NM_E", lat, lng),
+        dlsQuery(DLS_DISTRICT, "DIST_NM_E", lat, lng),
+    ]);
+    return { parcel, zone, municipality, district };
+}
+
 /* ── Core lookup by coordinates ── */
 async function lookupByCoords(lat, lng, btn) {
     setButtonLoading(btn, true);
     document.getElementById('result').style.display = 'none';
     try {
-        const shortId = await findSubstation(lat, lng);
-        if (!shortId) {
-            showError(`No substation polygon found for coordinates ${lat.toFixed(6)}, ${lng.toFixed(6)}.`);
-            return;
-        }
-        const names = await getSubstationNames();
-        showResult(shortId, lat, lng, names[shortId] || {});
+        const [shortId, plotInfo, substNames] = await Promise.all([
+            findSubstation(lat, lng),
+            findPlotInfo(lat, lng),
+            getSubstationNames(),
+        ]);
+
+        const substInfo = shortId ? (substNames[shortId] || {}) : null;
+        showResult(lat, lng, plotInfo, shortId, substInfo);
     } catch (err) {
         showError(err.message);
     } finally {
@@ -283,30 +318,113 @@ function doAddrLookup() {
 }
 
 /* ── Result display ── */
-function showResult(shortId, lat, lng, info) {
+function showResult(lat, lng, plot, shortId, substInfo) {
     const resultDiv = document.getElementById('result');
-    const hostMW = info.HostingCapacityNet_MW;
-    const resMW = info.REStotal_MW;
-    const availMW = info.AvailableCapacity_MW;
-    const usedPct = hostMW > 0 ? ((resMW / hostMW) * 100).toFixed(1) : 0;
-    const barColor = usedPct < 75 ? '#34d399' : usedPct < 85 ? '#fbbf24' : usedPct < 95 ? '#fb923c' : '#f87171';
-    const nameEl = info.SUBSTATIONNAMEEL || shortId;
-    const nameEn = info.SUBSTATIONNAMEEN || shortId;
+    let html = '';
 
-    resultDiv.innerHTML = `
-        <div class="result-header">
-            <div class="result-icon success">⚡</div>
-            <div class="result-name">${nameEl}</div>
-        </div>
-        <div class="result-grid">
+    /* ── Plot Info Section ── */
+    const p = plot.parcel;
+    const z = plot.zone;
+    const muni = plot.municipality;
+    const dist = plot.district;
+    const hasPlot = p || z || muni || dist;
+
+    if (hasPlot) {
+        html += `<div class="section-header">📋 Plot Info <span class="section-source">Ktimatologio / DLS</span></div>`;
+        html += `<div class="result-grid">`;
+        if (p) {
+            html += `
+                <div class="result-item">
+                    <div class="result-label">Parcel Number</div>
+                    <div class="result-value">${p.PARCEL_NBR}</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">Sheet / Plan</div>
+                    <div class="result-value">${p.SHEET || '—'} / ${p.PLAN_NBR || '—'}</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">Block</div>
+                    <div class="result-value">${p.BLCK_CODE ?? '—'}</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">Area</div>
+                    <div class="result-value">${p['SHAPE.STArea()'] ? Math.round(p['SHAPE.STArea()']).toLocaleString() + ' m²' : '—'}</div>
+                </div>`;
+        }
+        if (dist || muni) {
+            html += `
+                <div class="result-item">
+                    <div class="result-label">District</div>
+                    <div class="result-value">${dist?.DIST_NM_E || '—'}</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">Municipality</div>
+                    <div class="result-value">${muni?.VIL_NM_E || '—'}</div>
+                </div>`;
+        }
+        if (z) {
+            html += `
+                <div class="result-item full">
+                    <div class="result-label">Planning Zone</div>
+                    <div class="result-value">${z.PLNZNT_NAME} — ${z.PLNZNT_DESC}</div>
+                </div>`;
+        }
+        html += `</div>`;
+    }
+
+    /* ── Substation Section ── */
+    if (shortId && substInfo) {
+        const hostMW = substInfo.HostingCapacityNet_MW;
+        const resMW = substInfo.REStotal_MW;
+        const availMW = substInfo.AvailableCapacity_MW;
+        const usedPct = hostMW > 0 ? ((resMW / hostMW) * 100).toFixed(1) : 0;
+        const barColor = usedPct < 75 ? '#34d399' : usedPct < 85 ? '#fbbf24' : usedPct < 95 ? '#fb923c' : '#f87171';
+        const nameEl = substInfo.SUBSTATIONNAMEEL || shortId;
+        const nameEn = substInfo.SUBSTATIONNAMEEN || shortId;
+
+        html += `<div class="section-header">⚡ Substation <span class="section-source">EAC</span></div>`;
+        html += `<div class="result-grid">
             <div class="result-item">
-                <div class="result-label">Name (EN)</div>
+                <div class="result-label">Substation (EL)</div>
+                <div class="result-value">${nameEl}</div>
+            </div>
+            <div class="result-item">
+                <div class="result-label">Substation (EN)</div>
                 <div class="result-value">${nameEn}</div>
             </div>
-            <div class="result-item">
-                <div class="result-label">Substation ID</div>
-                <div class="result-value">${shortId}</div>
+        </div>`;
+
+        if (hostMW != null) {
+            html += `
+            <div class="capacity-bar">
+                <div class="result-label">RES Capacity Usage</div>
+                <div class="bar-track">
+                    <div class="bar-fill" style="width:${Math.min(usedPct,100)}%;background:${barColor}"></div>
+                </div>
+                <div class="bar-labels">
+                    <span style="color:#94a3b8">Used: ${resMW?.toFixed(1) ?? '?'} MW</span>
+                    <span style="color:#94a3b8">Total: ${hostMW?.toFixed(1) ?? '?'} MW</span>
+                </div>
+                <div style="text-align:center;margin-top:6px;font-size:0.85rem;color:${barColor}">
+                    ${usedPct}% used — Available: ${availMW?.toFixed(1) ?? '?'} MW
+                </div>
+            </div>`;
+        }
+    } else if (!hasPlot) {
+        html += `
+            <div class="result-header">
+                <div class="result-icon error">✗</div>
+                <div class="result-name error-text">No data found</div>
             </div>
+            <div class="result-item full">
+                <div class="result-value">No plot or substation data found for ${lat.toFixed(6)}, ${lng.toFixed(6)}.</div>
+            </div>`;
+    }
+
+    /* ── Coordinates + Links ── */
+    html += `
+        <div class="section-header">📍 Location</div>
+        <div class="result-grid">
             <div class="result-item">
                 <div class="result-label">Latitude</div>
                 <div class="result-value">${lat.toFixed(6)}</div>
@@ -316,28 +434,19 @@ function showResult(shortId, lat, lng, info) {
                 <div class="result-value">${lng.toFixed(6)}</div>
             </div>
         </div>
-        ${hostMW != null ? `
-        <div class="capacity-bar">
-            <div class="result-label">RES Capacity Usage</div>
-            <div class="bar-track">
-                <div class="bar-fill" style="width:${Math.min(usedPct,100)}%;background:${barColor}"></div>
-            </div>
-            <div class="bar-labels">
-                <span style="color:#94a3b8">Used: ${resMW?.toFixed(1) ?? '?'} MW</span>
-                <span style="color:#94a3b8">Total: ${hostMW?.toFixed(1) ?? '?'} MW</span>
-            </div>
-            <div style="text-align:center;margin-top:6px;font-size:0.85rem;color:${barColor}">
-                ${usedPct}% used — Available: ${availMW?.toFixed(1) ?? '?'} MW
-            </div>
-        </div>` : ''}
         <div class="map-links">
+            <a class="map-link" href="https://eservices.dls.moi.gov.cy/arcgis/apps/webappviewer/index.html?id=727a83e7a5ea45b5af498f2e2e16b487&level=17&center=${lng},${lat}" target="_blank">
+                🏛️ DLS Portal
+            </a>
             <a class="map-link" href="https://www.arcgis.com/apps/mapviewer/index.html?webmap=3c33a4647de3416e8f21574ab8a4a0a1&center=${lng},${lat}&level=13" target="_blank">
-                🗺️ View on EAC Map
+                🗺️ EAC Map
             </a>
             <a class="map-link" href="https://www.google.com/maps?q=${lat},${lng}&z=15" target="_blank">
-                📍 Google Maps Pin
+                📍 Google Maps
             </a>
         </div>`;
+
+    resultDiv.innerHTML = html;
     resultDiv.style.display = 'block';
 }
 
