@@ -155,12 +155,13 @@
 const POLYGON_URL = "https://services5.arcgis.com/yaIunh7Pa3QmwPBN/arcgis/rest/services/DistrTrSubstThPoly20240528racp/FeatureServer/317/query";
 const SUBSTATION_URL = "https://services5.arcgis.com/yaIunh7Pa3QmwPBN/arcgis/rest/services/Transmission_Substations_RES_Hosting_WFL1/FeatureServer/0/query";
 const CORS_PROXIES = [
-    url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
 
 let substationCache = null;
+let substationPromise = null;
 
 function toggleClear() {
     document.getElementById('clearBtn').style.display =
@@ -174,22 +175,30 @@ function clearInput() {
     toggleClear();
 }
 
+function fetchWithTimeout(url, ms = 10000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
+async function tryProxy(makeProxy, url) {
+    const resp = await fetchWithTimeout(makeProxy(url), 10000);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const html = await resp.text();
+    const match = html.match(/data-default-lat="([0-9.]+)"\s+data-default-lng="([0-9.]+)"/);
+    if (!match) throw new Error("No coordinates in response");
+    return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+}
+
 async function fetchBazaraki(url) {
-    for (const makeProxy of CORS_PROXIES) {
-        try {
-            const resp = await fetch(makeProxy(url));
-            if (!resp.ok) continue;
-            const html = await resp.text();
-            const match = html.match(/data-default-lat="([0-9.]+)"\s+data-default-lng="([0-9.]+)"/);
-            if (match) return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
-        } catch (e) {
-            continue;
-        }
+    try {
+        return await Promise.any(CORS_PROXIES.map(p => tryProxy(p, url)));
+    } catch (e) {
+        throw new Error(
+            "Could not fetch coordinates from Bazaraki. All proxies failed.\n" +
+            "Try opening the ad, right-clicking → View Page Source, and searching for 'data-default-lat'."
+        );
     }
-    throw new Error(
-        "Could not fetch coordinates from Bazaraki. All proxies failed.\n" +
-        "Try opening the ad, right-clicking → View Page Source, and searching for 'data-default-lat'."
-    );
 }
 
 async function findSubstation(lat, lng) {
@@ -210,8 +219,7 @@ async function findSubstation(lat, lng) {
     return features.length > 0 ? features[0].attributes.SCADASUBSTSHORTID : null;
 }
 
-async function getSubstationNames() {
-    if (substationCache) return substationCache;
+async function _fetchSubstationNames() {
     const params = new URLSearchParams({
         where: "1=1",
         outFields: "SUBSTATIONNAMEEL,SUBSTATIONNAMEEN,SCADASUBSTSHORTID,HostingCapacityNet_MW,REStotal_MW,AvailableCapacity_MW",
@@ -227,6 +235,13 @@ async function getSubstationNames() {
     substationCache = map;
     return map;
 }
+
+function getSubstationNames() {
+    if (!substationPromise) substationPromise = _fetchSubstationNames();
+    return substationPromise;
+}
+
+getSubstationNames();
 
 async function doLookup(e) {
     e.preventDefault();
