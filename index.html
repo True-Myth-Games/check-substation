@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bazaraki Substation Lookup</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -21,13 +23,34 @@
             border: 1px solid #334155;
             border-radius: 16px;
             padding: 40px;
-            max-width: 600px;
+            max-width: 640px;
             width: 100%;
             box-shadow: 0 25px 50px rgba(0,0,0,0.3);
         }
         h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 8px; color: #f1f5f9; }
-        .subtitle { color: #94a3b8; font-size: 0.9rem; margin-bottom: 28px; }
-        .input-group { display: flex; gap: 10px; margin-bottom: 24px; }
+        .subtitle { color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 4px; margin-bottom: 20px; background: #0f172a; border-radius: 10px; padding: 4px; }
+        .tab-btn {
+            flex: 1;
+            padding: 10px 8px;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            color: #64748b;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .tab-btn:hover { color: #94a3b8; }
+        .tab-btn.active { background: #3b82f6; color: white; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* Shared input styles */
+        .input-group { display: flex; gap: 10px; margin-bottom: 0; }
         .input-wrapper { flex: 1; position: relative; }
         input[type="text"] {
             width: 100%;
@@ -51,8 +74,7 @@
             background: #475569;
             border: none;
             color: #e2e8f0;
-            width: 22px;
-            height: 22px;
+            width: 22px; height: 22px;
             border-radius: 50%;
             font-size: 0.75rem;
             cursor: pointer;
@@ -75,6 +97,57 @@
         }
         button.submit:hover { background: #2563eb; }
         button.submit:disabled { background: #475569; cursor: not-allowed; }
+
+        /* Map */
+        #map {
+            width: 100%;
+            height: 350px;
+            border-radius: 10px;
+            border: 1px solid #475569;
+            margin-bottom: 12px;
+            z-index: 0;
+        }
+        .map-hint {
+            color: #64748b;
+            font-size: 0.8rem;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+        .map-hint .coords { color: #94a3b8; font-weight: 500; }
+        #mapLookupBtn { width: 100%; }
+
+        /* Address search */
+        .address-results {
+            list-style: none;
+            margin: 10px 0 0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .address-results li {
+            padding: 10px 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            font-size: 0.88rem;
+            color: #cbd5e1;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .address-results li:hover { background: #1e293b; border-color: #3b82f6; }
+        .address-results li.selected { border-color: #3b82f6; background: #1e3a5f; }
+        #addrMap {
+            width: 100%;
+            height: 200px;
+            border-radius: 10px;
+            border: 1px solid #475569;
+            margin: 12px 0;
+            display: none;
+            z-index: 0;
+        }
+        #addrLookupBtn { width: 100%; margin-top: 4px; }
+
+        /* Spinner */
         .spinner {
             display: inline-block;
             width: 18px; height: 18px;
@@ -86,12 +159,15 @@
             margin-right: 6px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Results */
         #result {
             display: none;
             background: #0f172a;
             border: 1px solid #334155;
             border-radius: 12px;
             padding: 24px;
+            margin-top: 24px;
             animation: fadeIn 0.3s ease;
         }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -138,20 +214,55 @@
 <body>
     <div class="container">
         <h1>Bazaraki Substation Lookup</h1>
-        <p class="subtitle">Paste a Bazaraki land ad URL to find which EAC transmission substation it belongs to.</p>
-        <form id="form" onsubmit="doLookup(event)">
-            <div class="input-group">
-                <div class="input-wrapper">
-                    <input type="text" id="url" placeholder="https://www.bazaraki.com/adv/..." autofocus oninput="toggleClear()">
-                    <button type="button" class="clear-btn" id="clearBtn" onclick="clearInput()">✕</button>
+        <p class="subtitle">Find which EAC transmission substation a plot of land belongs to.</p>
+
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('bazaraki')">Bazaraki URL</button>
+            <button class="tab-btn" onclick="switchTab('map')">Pin on Map</button>
+            <button class="tab-btn" onclick="switchTab('address')">Search Address</button>
+        </div>
+
+        <!-- Tab 1: Bazaraki URL -->
+        <div id="tab-bazaraki" class="tab-panel active">
+            <form onsubmit="doBazarakiLookup(event)">
+                <div class="input-group">
+                    <div class="input-wrapper">
+                        <input type="text" id="url" placeholder="https://www.bazaraki.com/adv/..." autofocus oninput="toggleClear('url','clearBtn')">
+                        <button type="button" class="clear-btn" id="clearBtn" onclick="clearField('url','clearBtn')">✕</button>
+                    </div>
+                    <button type="submit" class="submit" id="bazBtn">Lookup</button>
                 </div>
-                <button type="submit" class="submit" id="btn">Lookup</button>
-            </div>
-        </form>
+            </form>
+        </div>
+
+        <!-- Tab 2: Pin on Map -->
+        <div id="tab-map" class="tab-panel">
+            <div id="map"></div>
+            <div class="map-hint" id="mapHint">Click anywhere on the map to drop a pin</div>
+            <button class="submit" id="mapLookupBtn" disabled onclick="doMapLookup()">Lookup</button>
+        </div>
+
+        <!-- Tab 3: Address Search -->
+        <div id="tab-address" class="tab-panel">
+            <form onsubmit="doAddressSearch(event)">
+                <div class="input-group">
+                    <div class="input-wrapper">
+                        <input type="text" id="addrInput" placeholder="e.g. Paralimni, Protaras, Larnaca..." oninput="toggleClear('addrInput','addrClearBtn')">
+                        <button type="button" class="clear-btn" id="addrClearBtn" onclick="clearField('addrInput','addrClearBtn'); clearAddressResults()">✕</button>
+                    </div>
+                    <button type="submit" class="submit" id="addrSearchBtn">Search</button>
+                </div>
+            </form>
+            <ul class="address-results" id="addrResults"></ul>
+            <div id="addrMap"></div>
+            <button class="submit" id="addrLookupBtn" style="display:none" onclick="doAddrLookup()">Lookup this location</button>
+        </div>
+
         <div id="result"></div>
     </div>
-<script>
 
+<script>
+/* ── Config ── */
 const POLYGON_URL = "https://services5.arcgis.com/yaIunh7Pa3QmwPBN/arcgis/rest/services/DistrTrSubstThPoly20240528racp/FeatureServer/317/query";
 const SUBSTATION_URL = "https://services5.arcgis.com/yaIunh7Pa3QmwPBN/arcgis/rest/services/Transmission_Substations_RES_Hosting_WFL1/FeatureServer/0/query";
 const CORS_PROXIES = [
@@ -159,20 +270,46 @@ const CORS_PROXIES = [
     url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
+const CYPRUS_CENTER = [35.1, 33.4];
+const CYPRUS_ZOOM = 9;
 
-let substationCache = null;
+/* ── State ── */
 let substationPromise = null;
+let leafletMap = null;
+let mapMarker = null;
+let mapPickedCoords = null;
+let addrMap = null;
+let addrMarker = null;
+let addrPickedCoords = null;
 
-function toggleClear() {
-    document.getElementById('clearBtn').style.display =
-        document.getElementById('url').value ? 'block' : 'none';
+/* ── Tabs ── */
+function switchTab(id) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + id).classList.add('active');
+    event.target.classList.add('active');
+    document.getElementById('result').style.display = 'none';
+
+    if (id === 'map') initMap();
+    if (id === 'address') initAddrMap();
 }
 
-function clearInput() {
-    const input = document.getElementById('url');
-    input.value = '';
-    input.focus();
-    toggleClear();
+/* ── Shared helpers ── */
+function toggleClear(inputId, btnId) {
+    document.getElementById(btnId).style.display =
+        document.getElementById(inputId).value ? 'block' : 'none';
+}
+
+function clearField(inputId, btnId) {
+    const el = document.getElementById(inputId);
+    el.value = '';
+    el.focus();
+    document.getElementById(btnId).style.display = 'none';
+}
+
+function setButtonLoading(btn, loading) {
+    btn.disabled = loading;
+    btn.innerHTML = loading ? '<span class="spinner"></span>Looking up...' : 'Lookup';
 }
 
 function fetchWithTimeout(url, ms = 10000) {
@@ -181,6 +318,7 @@ function fetchWithTimeout(url, ms = 10000) {
     return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
 }
 
+/* ── Bazaraki fetch ── */
 async function tryProxy(makeProxy, url) {
     const resp = await fetchWithTimeout(makeProxy(url), 10000);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -193,14 +331,12 @@ async function tryProxy(makeProxy, url) {
 async function fetchBazaraki(url) {
     try {
         return await Promise.any(CORS_PROXIES.map(p => tryProxy(p, url)));
-    } catch (e) {
-        throw new Error(
-            "Could not fetch coordinates from Bazaraki. All proxies failed.\n" +
-            "Try opening the ad, right-clicking → View Page Source, and searching for 'data-default-lat'."
-        );
+    } catch {
+        throw new Error("Could not fetch coordinates from Bazaraki. Try the 'Pin on Map' or 'Search Address' tab instead.");
     }
 }
 
+/* ── ArcGIS queries ── */
 async function findSubstation(lat, lng) {
     const delta = 0.001;
     const geometry = JSON.stringify({
@@ -232,7 +368,6 @@ async function _fetchSubstationNames() {
         const a = feat.attributes;
         if (a.SCADASUBSTSHORTID) map[a.SCADASUBSTSHORTID.trim()] = a;
     }
-    substationCache = map;
     return map;
 }
 
@@ -243,7 +378,27 @@ function getSubstationNames() {
 
 getSubstationNames();
 
-async function doLookup(e) {
+/* ── Core lookup by coordinates ── */
+async function lookupByCoords(lat, lng, btn) {
+    setButtonLoading(btn, true);
+    document.getElementById('result').style.display = 'none';
+    try {
+        const shortId = await findSubstation(lat, lng);
+        if (!shortId) {
+            showError(`No substation polygon found for coordinates ${lat.toFixed(6)}, ${lng.toFixed(6)}.`);
+            return;
+        }
+        const names = await getSubstationNames();
+        showResult(shortId, lat, lng, names[shortId] || {});
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        setButtonLoading(btn, false);
+    }
+}
+
+/* ── Tab 1: Bazaraki URL ── */
+async function doBazarakiLookup(e) {
     e.preventDefault();
     const url = document.getElementById('url').value.trim();
     if (!url) return;
@@ -251,85 +406,203 @@ async function doLookup(e) {
         showError('Please enter a valid bazaraki.com URL.');
         return;
     }
-
-    const btn = document.getElementById('btn');
-    const resultDiv = document.getElementById('result');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span>Looking up...';
-    resultDiv.style.display = 'none';
-
+    const btn = document.getElementById('bazBtn');
+    setButtonLoading(btn, true);
+    document.getElementById('result').style.display = 'none';
     try {
         const { lat, lng } = await fetchBazaraki(url);
-        const shortId = await findSubstation(lat, lng);
+        await lookupByCoords(lat, lng, btn);
+    } catch (err) {
+        showError(err.message);
+        setButtonLoading(btn, false);
+    }
+}
 
-        if (!shortId) {
-            showError(`No substation polygon found for coordinates ${lat.toFixed(6)}, ${lng.toFixed(6)}.`);
+/* ── Tab 2: Map Pin ── */
+function initMap() {
+    if (leafletMap) { leafletMap.invalidateSize(); return; }
+    leafletMap = L.map('map').setView(CYPRUS_CENTER, CYPRUS_ZOOM);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19,
+    }).addTo(leafletMap);
+
+    leafletMap.on('click', function(e) {
+        const { lat, lng } = e.latlng;
+        mapPickedCoords = { lat, lng };
+        if (mapMarker) {
+            mapMarker.setLatLng(e.latlng);
+        } else {
+            mapMarker = L.marker(e.latlng, { draggable: true }).addTo(leafletMap);
+            mapMarker.on('dragend', function() {
+                const pos = mapMarker.getLatLng();
+                mapPickedCoords = { lat: pos.lat, lng: pos.lng };
+                updateMapHint();
+            });
+        }
+        updateMapHint();
+        document.getElementById('mapLookupBtn').disabled = false;
+    });
+
+    setTimeout(() => leafletMap.invalidateSize(), 100);
+}
+
+function updateMapHint() {
+    if (mapPickedCoords) {
+        document.getElementById('mapHint').innerHTML =
+            'Pin: <span class="coords">' + mapPickedCoords.lat.toFixed(6) + ', ' + mapPickedCoords.lng.toFixed(6) + '</span> (drag to adjust)';
+    }
+}
+
+function doMapLookup() {
+    if (!mapPickedCoords) return;
+    lookupByCoords(mapPickedCoords.lat, mapPickedCoords.lng, document.getElementById('mapLookupBtn'));
+}
+
+/* ── Tab 3: Address Search ── */
+function initAddrMap() {
+    if (addrMap) { addrMap.invalidateSize(); return; }
+    const el = document.getElementById('addrMap');
+    el.style.display = 'none';
+    addrMap = L.map('addrMap').setView(CYPRUS_CENTER, CYPRUS_ZOOM);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19,
+    }).addTo(addrMap);
+}
+
+async function doAddressSearch(e) {
+    e.preventDefault();
+    const q = document.getElementById('addrInput').value.trim();
+    if (!q) return;
+    const btn = document.getElementById('addrSearchBtn');
+    btn.disabled = true;
+    btn.textContent = 'Searching...';
+    document.getElementById('addrResults').innerHTML = '';
+    document.getElementById('addrLookupBtn').style.display = 'none';
+    document.getElementById('addrMap').style.display = 'none';
+
+    try {
+        const params = new URLSearchParams({
+            q, format: 'json', countrycodes: 'cy', limit: '5', addressdetails: '1',
+        });
+        const resp = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+            headers: { 'Accept': 'application/json' },
+        });
+        const results = await resp.json();
+        const list = document.getElementById('addrResults');
+
+        if (results.length === 0) {
+            list.innerHTML = '<li style="cursor:default;color:#64748b">No results found. Try a different search.</li>';
             return;
         }
 
-        const names = await getSubstationNames();
-        const info = names[shortId] || {};
-
-        const hostMW = info.HostingCapacityNet_MW;
-        const resMW = info.REStotal_MW;
-        const availMW = info.AvailableCapacity_MW;
-        const usedPct = hostMW > 0 ? ((resMW / hostMW) * 100).toFixed(1) : 0;
-        const barColor = usedPct < 75 ? '#34d399' : usedPct < 85 ? '#fbbf24' : usedPct < 95 ? '#fb923c' : '#f87171';
-        const nameEl = info.SUBSTATIONNAMEEL || shortId;
-        const nameEn = info.SUBSTATIONNAMEEN || shortId;
-
-        resultDiv.innerHTML = `
-            <div class="result-header">
-                <div class="result-icon success">⚡</div>
-                <div class="result-name">${nameEl}</div>
-            </div>
-            <div class="result-grid">
-                <div class="result-item">
-                    <div class="result-label">Name (EN)</div>
-                    <div class="result-value">${nameEn}</div>
-                </div>
-                <div class="result-item">
-                    <div class="result-label">Substation ID</div>
-                    <div class="result-value">${shortId}</div>
-                </div>
-                <div class="result-item">
-                    <div class="result-label">Latitude</div>
-                    <div class="result-value">${lat.toFixed(6)}</div>
-                </div>
-                <div class="result-item">
-                    <div class="result-label">Longitude</div>
-                    <div class="result-value">${lng.toFixed(6)}</div>
-                </div>
-            </div>
-            ${hostMW != null ? `
-            <div class="capacity-bar">
-                <div class="result-label">RES Capacity Usage</div>
-                <div class="bar-track">
-                    <div class="bar-fill" style="width:${Math.min(usedPct,100)}%;background:${barColor}"></div>
-                </div>
-                <div class="bar-labels">
-                    <span style="color:#94a3b8">Used: ${resMW?.toFixed(1) ?? '?'} MW</span>
-                    <span style="color:#94a3b8">Total: ${hostMW?.toFixed(1) ?? '?'} MW</span>
-                </div>
-                <div style="text-align:center;margin-top:6px;font-size:0.85rem;color:${barColor}">
-                    ${usedPct}% used — Available: ${availMW?.toFixed(1) ?? '?'} MW
-                </div>
-            </div>` : ''}
-            <div class="map-links">
-                <a class="map-link" href="https://www.arcgis.com/apps/mapviewer/index.html?webmap=3c33a4647de3416e8f21574ab8a4a0a1&center=${lng},${lat}&level=13" target="_blank">
-                    🗺️ View on EAC Map
-                </a>
-                <a class="map-link" href="https://www.google.com/maps?q=${lat},${lng}&z=15" target="_blank">
-                    📍 Google Maps Pin
-                </a>
-            </div>`;
-        resultDiv.style.display = 'block';
+        results.forEach((r, i) => {
+            const li = document.createElement('li');
+            li.textContent = r.display_name;
+            li.onclick = () => selectAddress(r, li);
+            list.appendChild(li);
+        });
     } catch (err) {
-        showError(err.message);
+        showError('Address search failed: ' + err.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Lookup';
+        btn.textContent = 'Search';
     }
+}
+
+function selectAddress(result, li) {
+    document.querySelectorAll('#addrResults li').forEach(el => el.classList.remove('selected'));
+    li.classList.add('selected');
+
+    const lat = parseFloat(result.lat);
+    const lng = parseFloat(result.lon);
+    addrPickedCoords = { lat, lng };
+
+    const mapEl = document.getElementById('addrMap');
+    mapEl.style.display = 'block';
+    setTimeout(() => {
+        addrMap.invalidateSize();
+        addrMap.setView([lat, lng], 14);
+        if (addrMarker) {
+            addrMarker.setLatLng([lat, lng]);
+        } else {
+            addrMarker = L.marker([lat, lng]).addTo(addrMap);
+        }
+    }, 50);
+
+    document.getElementById('addrLookupBtn').style.display = 'block';
+}
+
+function clearAddressResults() {
+    document.getElementById('addrResults').innerHTML = '';
+    document.getElementById('addrMap').style.display = 'none';
+    document.getElementById('addrLookupBtn').style.display = 'none';
+    addrPickedCoords = null;
+}
+
+function doAddrLookup() {
+    if (!addrPickedCoords) return;
+    lookupByCoords(addrPickedCoords.lat, addrPickedCoords.lng, document.getElementById('addrLookupBtn'));
+}
+
+/* ── Result display ── */
+function showResult(shortId, lat, lng, info) {
+    const resultDiv = document.getElementById('result');
+    const hostMW = info.HostingCapacityNet_MW;
+    const resMW = info.REStotal_MW;
+    const availMW = info.AvailableCapacity_MW;
+    const usedPct = hostMW > 0 ? ((resMW / hostMW) * 100).toFixed(1) : 0;
+    const barColor = usedPct < 75 ? '#34d399' : usedPct < 85 ? '#fbbf24' : usedPct < 95 ? '#fb923c' : '#f87171';
+    const nameEl = info.SUBSTATIONNAMEEL || shortId;
+    const nameEn = info.SUBSTATIONNAMEEN || shortId;
+
+    resultDiv.innerHTML = `
+        <div class="result-header">
+            <div class="result-icon success">⚡</div>
+            <div class="result-name">${nameEl}</div>
+        </div>
+        <div class="result-grid">
+            <div class="result-item">
+                <div class="result-label">Name (EN)</div>
+                <div class="result-value">${nameEn}</div>
+            </div>
+            <div class="result-item">
+                <div class="result-label">Substation ID</div>
+                <div class="result-value">${shortId}</div>
+            </div>
+            <div class="result-item">
+                <div class="result-label">Latitude</div>
+                <div class="result-value">${lat.toFixed(6)}</div>
+            </div>
+            <div class="result-item">
+                <div class="result-label">Longitude</div>
+                <div class="result-value">${lng.toFixed(6)}</div>
+            </div>
+        </div>
+        ${hostMW != null ? `
+        <div class="capacity-bar">
+            <div class="result-label">RES Capacity Usage</div>
+            <div class="bar-track">
+                <div class="bar-fill" style="width:${Math.min(usedPct,100)}%;background:${barColor}"></div>
+            </div>
+            <div class="bar-labels">
+                <span style="color:#94a3b8">Used: ${resMW?.toFixed(1) ?? '?'} MW</span>
+                <span style="color:#94a3b8">Total: ${hostMW?.toFixed(1) ?? '?'} MW</span>
+            </div>
+            <div style="text-align:center;margin-top:6px;font-size:0.85rem;color:${barColor}">
+                ${usedPct}% used — Available: ${availMW?.toFixed(1) ?? '?'} MW
+            </div>
+        </div>` : ''}
+        <div class="map-links">
+            <a class="map-link" href="https://www.arcgis.com/apps/mapviewer/index.html?webmap=3c33a4647de3416e8f21574ab8a4a0a1&center=${lng},${lat}&level=13" target="_blank">
+                🗺️ View on EAC Map
+            </a>
+            <a class="map-link" href="https://www.google.com/maps?q=${lat},${lng}&z=15" target="_blank">
+                📍 Google Maps Pin
+            </a>
+        </div>`;
+    resultDiv.style.display = 'block';
 }
 
 function showError(msg) {
@@ -343,8 +616,6 @@ function showError(msg) {
             <div class="result-value">${msg}</div>
         </div>`;
     resultDiv.style.display = 'block';
-    document.getElementById('btn').disabled = false;
-    document.getElementById('btn').textContent = 'Lookup';
 }
 </script>
 </body>
