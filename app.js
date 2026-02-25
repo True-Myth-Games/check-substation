@@ -435,7 +435,7 @@ function showResult(lat, lng, plot, shortId, substInfo) {
             </div>
         </div>
         <div class="map-links">
-            <a class="map-link" href="https://eservices.dls.moi.gov.cy/arcgis/apps/webappviewer/index.html?id=727a83e7a5ea45b5af498f2e2e16b487&level=17&center=${lng},${lat}" target="_blank">
+            <a class="map-link" href="https://eservices.dls.moi.gov.cy/#/national/geoportalmapviewer" target="_blank">
                 🏛️ DLS Portal
             </a>
             <a class="map-link" href="https://www.arcgis.com/apps/mapviewer/index.html?webmap=3c33a4647de3416e8f21574ab8a4a0a1&center=${lng},${lat}&level=13" target="_blank">
